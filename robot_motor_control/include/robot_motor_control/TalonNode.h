@@ -22,12 +22,15 @@
 namespace robot_motor_control{
     class TalonNode{
     private:
+        boost::mutex mutex;
+
         ros::NodeHandle nh;
         std::string _name;
         dynamic_reconfigure::Server<robot_motor_control::TalonConfig> server;
         TalonConfig _config;
 
-        std::unique_ptr<TalonSRX> talon;
+        std::shared_ptr<std::thread> thread;
+        std::shared_ptr<TalonSRX> talon;
 
         ros::Publisher tempPub;
         ros::Publisher busVoltagePub;
@@ -51,14 +54,14 @@ namespace robot_motor_control{
         bool configured;
         bool not_configured_warned;
 
-        boost::mutex mutex;
-
     public:
         TalonNode(const ros::NodeHandle& parent, const std::string& name, const TalonConfig& config);
 
         TalonNode& operator=(const TalonNode&) = delete;
 
         ~TalonNode() = default;
+
+        void loop();
 
         void reconfigure(const TalonConfig &config, uint32_t level);
 
@@ -69,8 +72,6 @@ namespace robot_motor_control{
         void setVelocity(std_msgs::Float64 output);
 
         void setPosition(std_msgs::Float64 output);
-
-        void update();
 
         static void configureStatusPeriod(TalonSRX& talon);
 
