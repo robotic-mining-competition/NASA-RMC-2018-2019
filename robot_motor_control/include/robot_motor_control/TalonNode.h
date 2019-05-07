@@ -61,11 +61,11 @@ namespace robot_motor_control{
 
         ~TalonNode() = default;
 
-        void loop();
-
         void reconfigure(const TalonConfig &config, uint32_t level);
 
         void configure();
+
+        void update();
 
         void setPercentOutput(std_msgs::Float64 output);
 

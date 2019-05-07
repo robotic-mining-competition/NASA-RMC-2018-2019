@@ -2,7 +2,6 @@
 
 #include "ctre/phoenix/motorcontrol/VelocityMeasPeriod.h"
 #include "robot_motor_control/TalonNode.h"
-#include <boost/thread/lock_guard.hpp>
 
 using namespace ctre::phoenix;
 using namespace ctre::phoenix::platform;
@@ -12,8 +11,7 @@ using namespace ctre::phoenix::motorcontrol::can;
 namespace robot_motor_control {
 
     TalonNode::TalonNode(const ros::NodeHandle& parent, const std::string& name, const TalonConfig& config):
-            nh(parent), _name(name), server(nh), _config(config), thread(nullptr),
-            talon(new TalonSRX(_config.id)),
+            nh(parent), _name(name), server(nh), _config(config), thread(nullptr), talon(new TalonSRX(_config.id)),
             tempPub(nh.advertise<std_msgs::Float64>("temperature", 1)),
             busVoltagePub(nh.advertise<std_msgs::Float64>("bus_voltage", 1)),
             outputPercentPub(nh.advertise<std_msgs::Float64>("output_percent", 1)),
@@ -31,16 +29,101 @@ namespace robot_motor_control {
             disabled(false), configured(false), not_configured_warned(false){
         server.updateConfig(_config);
         server.setCallback(boost::bind(&TalonNode::reconfigure, this, _1, _2));
-        thread = std::make_shared<std::thread>([this]{this->loop();});
     }
 
-    void TalonNode::loop(){
-        ros::Rate loop_rate(50);
-        while(ros::ok()){
-            boost::lock_guard<boost::mutex> guard(mutex);
-            if(!this->configured){
-                this->configure();
+    void TalonNode::setPercentOutput(std_msgs::Float64 output) {
+        boost::mutex::scoped_lock scoped_lock(mutex);
+        this->_controlMode = ControlMode::PercentOutput;
+        this->_output = output.data;
+        this->lastUpdate = ros::Time::now();
+    }
+
+    void TalonNode::setVelocity(std_msgs::Float64 output) {
+        boost::mutex::scoped_lock scoped_lock(mutex);
+        this->_controlMode = ControlMode::Velocity;
+        this->_output = output.data;
+        this->lastUpdate = ros::Time::now();
+    }
+
+    void TalonNode::setPosition(std_msgs::Float64 output) {
+        boost::mutex::scoped_lock scoped_lock(mutex);
+        this->_controlMode = ControlMode::Position;
+        this->_output = output.data;
+        this->lastUpdate = ros::Time::now();
+    }
+
+    void TalonNode::reconfigure(const TalonConfig &config, uint32_t level) {
+        ROS_INFO("Reconfigure called on %d with id %d", talon->GetDeviceID(), config.id);
+        boost::mutex::scoped_lock scoped_lock(mutex);
+        this->_config = config;
+        if(thread != nullptr){
+            if(configured){
+                thread->join();
+                thread = nullptr;
+            }else{
+                return;
             }
+        }
+        this->configured = false;
+        thread = std::make_shared<std::thread>([this]{this->configure();});
+    }
+
+    void TalonNode::configure(){
+        ros::Rate loop_rate(5);
+        while(ros::ok()) {
+            ROS_INFO("Trying to configure %s %d", _name.c_str(), _config.id);
+            if (talon->GetDeviceID() != _config.id) {
+                ROS_INFO("Resetting TalonNode to new id: %d", _config.id);
+                talon = std::make_shared<TalonSRX>(_config.id);
+            }
+
+            TalonSRXConfiguration c;
+            SlotConfiguration slot;
+            slot.kP = _config.P;
+            slot.kI = _config.I;
+            slot.kD = _config.D;
+            slot.kF = _config.F;
+            c.slot0 = slot;
+            c.voltageCompSaturation = _config.peak_voltage;
+            c.pulseWidthPeriod_EdgesPerRot = 4096;
+            ErrorCode error = talon->ConfigAllSettings(c, 20);
+
+            if (error != ErrorCode::OK) {
+                if (!this->not_configured_warned) {
+                    ROS_WARN("Reconfiguring Talon %s %d failed!", _name.c_str(), talon->GetDeviceID());
+                    this->not_configured_warned = true;
+                }
+                this->configured = false;
+            } else {
+                configureStatusPeriod(*talon);
+
+                if (_config.pot) {
+                    talon->ConfigSelectedFeedbackSensor(FeedbackDevice::Analog);
+                } else {
+                    talon->ConfigSelectedFeedbackSensor(FeedbackDevice::CTRE_MagEncoder_Relative);
+                }
+
+                talon->SetSensorPhase(_config.invert_sensor);
+                talon->SelectProfileSlot(0, 0);
+                talon->SetInverted(_config.inverted);
+                talon->EnableVoltageCompensation(true);
+                talon->SetNeutralMode(NeutralMode::Brake);
+
+                ROS_INFO("Reconfigured Talon: %s with %d %f %f %f", _name.c_str(), talon->GetDeviceID(),
+                         _config.P, _config.I, _config.D);
+                this->not_configured_warned = false;
+                this->configured = true;
+                return;
+            }
+            loop_rate.sleep();
+        }
+    }
+
+    void TalonNode::update(){
+        if(!this->configured){
+            talon->NeutralOutput();
+        }else{
+            boost::mutex::scoped_lock scoped_lock(mutex);
             if(ros::Time::now()-lastUpdate > ros::Duration(0.2)){
                 // Disable the Talon if we aren't getting commands
                 if(!this->disabled) ROS_WARN("Talon disabled for not receiving updates: %s", _name.c_str());
@@ -91,81 +174,6 @@ namespace robot_motor_control {
             std_msgs::Int32 velocity;
             velocity.data = talon->GetSelectedSensorVelocity();
             velPub.publish(velocity);
-
-            loop_rate.sleep();
-        }
-        ROS_WARN("TalonNode thread exited! %s %d", _name.c_str(), _config.id);
-    }
-
-    void TalonNode::setPercentOutput(std_msgs::Float64 output) {
-        boost::lock_guard<boost::mutex> guard(mutex);
-        this->_controlMode = ControlMode::PercentOutput;
-        this->_output = output.data;
-        this->lastUpdate = ros::Time::now();
-    }
-
-    void TalonNode::setVelocity(std_msgs::Float64 output) {
-        boost::lock_guard<boost::mutex> guard(mutex);
-        this->_controlMode = ControlMode::Velocity;
-        this->_output = output.data;
-        this->lastUpdate = ros::Time::now();
-    }
-
-    void TalonNode::setPosition(std_msgs::Float64 output) {
-        boost::lock_guard<boost::mutex> guard(mutex);
-        this->_controlMode = ControlMode::Position;
-        this->_output = output.data;
-        this->lastUpdate = ros::Time::now();
-    }
-
-    void TalonNode::reconfigure(const TalonConfig &config, uint32_t level) {
-        ROS_INFO("Reconfigure called on %d with id %d", talon->GetDeviceID(), config.id);
-        boost::lock_guard<boost::mutex> guard(mutex);
-        this->_config = config;
-        this->configured = false;
-    }
-
-    void TalonNode::configure(){
-        if (talon->GetDeviceID() != _config.id) {
-            ROS_INFO("Resetting TalonNode to new id: %d", _config.id);
-            talon = std::make_shared<TalonSRX>(_config.id);
-        }
-
-        TalonSRXConfiguration c;
-        SlotConfiguration slot;
-        slot.kP = _config.P;
-        slot.kI = _config.I;
-        slot.kD = _config.D;
-        slot.kF = _config.F;
-        c.slot0 = slot;
-        c.voltageCompSaturation = _config.peak_voltage;
-        c.pulseWidthPeriod_EdgesPerRot = 4096;
-        ErrorCode error = talon->ConfigAllSettings(c, 20);
-
-        if(error != ErrorCode::OK){
-            if(!this->not_configured_warned){
-                ROS_WARN("Reconfiguring Talon %s %d failed!", _name.c_str(), talon->GetDeviceID());
-                this->not_configured_warned = true;
-            }
-            this->configured = false;
-        }else{
-            configureStatusPeriod(*talon);
-
-            if(_config.pot){
-                talon->ConfigSelectedFeedbackSensor(FeedbackDevice::Analog);
-            }else{
-                talon->ConfigSelectedFeedbackSensor(FeedbackDevice::CTRE_MagEncoder_Relative);
-            }
-
-            talon->SetSensorPhase(_config.invert_sensor);
-            talon->SelectProfileSlot(0,0);
-            talon->SetInverted(_config.inverted);
-            talon->EnableVoltageCompensation(true);
-
-            ROS_INFO("Reconfigured Talon: %s with %d %f %f %f", _name.c_str(), talon->GetDeviceID(),
-                     _config.P, _config.I, _config.D);
-            this->not_configured_warned = false;
-            this->configured = true;
         }
     }
 
