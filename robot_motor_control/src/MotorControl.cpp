@@ -49,7 +49,7 @@ int main(int argc, char **argv) {
     ros::Rate loop_rate(50);
     while(ros::ok()){
         // Feed watchdog
-        ctre::phoenix::unmanaged::FeedEnable(200);
+        ctre::phoenix::unmanaged::FeedEnable(1000);
 
         std::for_each(talons.begin(), talons.end(), [](std::unique_ptr<TalonNode>& talon){
             talon->update();

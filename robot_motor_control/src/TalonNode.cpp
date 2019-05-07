@@ -124,7 +124,7 @@ namespace robot_motor_control {
             talon->NeutralOutput();
         }else{
             boost::mutex::scoped_lock scoped_lock(mutex);
-            if(ros::Time::now()-lastUpdate > ros::Duration(0.2)){
+            if(ros::Time::now()-lastUpdate > ros::Duration(1.0)){
                 // Disable the Talon if we aren't getting commands
                 if(!this->disabled) ROS_WARN("Talon disabled for not receiving updates: %s", _name.c_str());
                 this->disabled = true;
