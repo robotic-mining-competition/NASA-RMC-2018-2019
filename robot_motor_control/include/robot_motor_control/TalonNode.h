@@ -22,8 +22,6 @@
 namespace robot_motor_control{
     class TalonNode{
     private:
-        boost::mutex mutex;
-
         ros::NodeHandle nh;
         std::string _name;
         dynamic_reconfigure::Server<robot_motor_control::TalonConfig> server;
@@ -48,6 +46,8 @@ namespace robot_motor_control{
         ros::Subscriber setPosSub;
 
         ros::Time lastUpdate;
+        std::shared_ptr<ros::Time> stalled;
+        ros::Duration stall_time;
         ControlMode _controlMode;
         double _output;
         bool disabled;

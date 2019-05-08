@@ -25,28 +25,26 @@ namespace robot_motor_control {
             setPercentSub(nh.subscribe("set_percent_output", 1, &TalonNode::setPercentOutput, this)),
             setVelSub(nh.subscribe("set_velocity", 1, &TalonNode::setVelocity, this)),
             setPosSub(nh.subscribe("set_position", 1, &TalonNode::setPosition, this)),
-            lastUpdate(ros::Time::now()), _controlMode(ControlMode::PercentOutput), _output(0.0),
+            lastUpdate(ros::Time::now()), stalled(nullptr), _controlMode(ControlMode::PercentOutput), _output(0.0),
             disabled(false), configured(false), not_configured_warned(false){
         server.updateConfig(_config);
         server.setCallback(boost::bind(&TalonNode::reconfigure, this, _1, _2));
+        talon->SetNeutralMode(NeutralMode::Brake);
     }
 
     void TalonNode::setPercentOutput(std_msgs::Float64 output) {
-        boost::mutex::scoped_lock scoped_lock(mutex);
         this->_controlMode = ControlMode::PercentOutput;
         this->_output = output.data;
         this->lastUpdate = ros::Time::now();
     }
 
     void TalonNode::setVelocity(std_msgs::Float64 output) {
-        boost::mutex::scoped_lock scoped_lock(mutex);
         this->_controlMode = ControlMode::Velocity;
         this->_output = output.data;
         this->lastUpdate = ros::Time::now();
     }
 
     void TalonNode::setPosition(std_msgs::Float64 output) {
-        boost::mutex::scoped_lock scoped_lock(mutex);
         this->_controlMode = ControlMode::Position;
         this->_output = output.data;
         this->lastUpdate = ros::Time::now();
@@ -54,7 +52,6 @@ namespace robot_motor_control {
 
     void TalonNode::reconfigure(const TalonConfig &config, uint32_t level) {
         ROS_INFO("Reconfigure called on %d with id %d", talon->GetDeviceID(), config.id);
-        boost::mutex::scoped_lock scoped_lock(mutex);
         this->_config = config;
         if(thread != nullptr){
             if(configured){
@@ -69,7 +66,7 @@ namespace robot_motor_control {
     }
 
     void TalonNode::configure(){
-        ros::Rate loop_rate(5);
+        ros::Rate loop_rate(1);
         while(ros::ok()) {
             ROS_INFO("Trying to configure %s %d", _name.c_str(), _config.id);
             if (talon->GetDeviceID() != _config.id) {
@@ -107,7 +104,10 @@ namespace robot_motor_control {
                 talon->SelectProfileSlot(0, 0);
                 talon->SetInverted(_config.inverted);
                 talon->EnableVoltageCompensation(true);
-                talon->SetNeutralMode(NeutralMode::Brake);
+
+                talon->EnableCurrentLimit(true);
+                talon->ConfigPeakCurrentLimit(_config.current_limit);
+                talon->ConfigContinuousCurrentLimit(100);
 
                 ROS_INFO("Reconfigured Talon: %s with %d %f %f %f", _name.c_str(), talon->GetDeviceID(),
                          _config.P, _config.I, _config.D);
@@ -123,17 +123,48 @@ namespace robot_motor_control {
         if(!this->configured){
             talon->NeutralOutput();
         }else{
-            boost::mutex::scoped_lock scoped_lock(mutex);
             if(ros::Time::now()-lastUpdate > ros::Duration(1.0)){
                 // Disable the Talon if we aren't getting commands
                 if(!this->disabled) ROS_WARN("Talon disabled for not receiving updates: %s", _name.c_str());
                 this->disabled = true;
-                this->_controlMode = ControlMode::PercentOutput;
-                this->_output = 0.0;
-            }else{
+                talon->NeutralOutput();
+                talon->SetNeutralMode(NeutralMode::Coast);
+            }else if(this->disabled){
+                ROS_INFO("Talon enabled %s %d", _name.c_str(), _config.id);
                 this->disabled = false;
+                talon->SetNeutralMode(NeutralMode::Brake);
             }
-            talon->Set(this->_controlMode, this->_output);
+            if(!this->disabled){
+                talon->Set(this->_controlMode, this->_output);
+
+                //Check stalled
+                if(talon->GetOutputCurrent() !=0 && talon->GetMotorOutputVoltage() != 0 &&
+                talon->GetOutputCurrent() / talon->GetMotorOutputVoltage() > _config.stall_k){
+                    // Stalling
+                    if(stalled == nullptr){
+                        stalled = std::make_shared<ros::Time>(ros::Time::now());
+                        ROS_WARN("Motor is stalling! %s %d", _name.c_str(), _config.id);
+                    }else{
+                        stall_time = ros::Time::now() - *stalled;
+                        if(stall_time > ros::Duration(0.5)){
+                            talon->NeutralOutput();
+                            ROS_WARN("Motor disabled for stalling! %s %d", _name.c_str(), _config.id);
+                        }
+                    }
+                }else{
+                    // Not stalled
+                    if(stalled  != nullptr){
+                        if(stall_time > ros::Duration(0.5) && ros::Time::now() - *stalled - stall_time < ros::Duration(1.0)){
+                            // Let cool down
+                            talon->SetNeutralMode(NeutralMode::Coast);
+                            talon->NeutralOutput();
+                        }else{
+                            stalled.reset();
+                            talon->SetNeutralMode(NeutralMode::Brake);
+                        }
+                    }
+                }
+            }
 
             std_msgs::Float64 temperature;
             temperature.data = talon->GetTemperature();

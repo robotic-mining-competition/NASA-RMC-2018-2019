@@ -36,6 +36,8 @@ talons:
     id: 8
     inverted: False
     invert_sensor: True
+    stall_k: 10.0
+    current_limit: 50
     P: 0.15
     I: 0.001
     D: 10.0
@@ -43,6 +45,8 @@ talons:
     id: 2
     inverted: False
     invert_sensor: True
+    stall_k: 10.0
+    current_limit: 50
     P: 8.0
     I: 0.025
     D: 550.0
