@@ -39,8 +39,13 @@ namespace robot_motor_control {
     }
 
     void TalonNode::setVelocity(std_msgs::Float64 output) {
-        this->_controlMode = ControlMode::Velocity;
-        this->_output = output.data;
+        if(output.data == 0.0){
+            this->_controlMode = ControlMode::PercentOutput;
+            this->_output = 0.0;
+        }else{
+            this->_controlMode = ControlMode::Velocity;
+            this->_output = output.data;
+        }
         this->lastUpdate = ros::Time::now();
     }
 
@@ -66,7 +71,7 @@ namespace robot_motor_control {
     }
 
     void TalonNode::configure(){
-        ros::Rate loop_rate(1);
+        ros::Rate loop_rate(5);
         while(ros::ok()) {
             ROS_INFO("Trying to configure %s %d", _name.c_str(), _config.id);
             if (talon->GetDeviceID() != _config.id) {
@@ -105,9 +110,18 @@ namespace robot_motor_control {
                 talon->SetInverted(_config.inverted);
                 talon->EnableVoltageCompensation(true);
 
+                talon->ConfigContinuousCurrentLimit(_config.continuous_current);
+                talon->ConfigPeakCurrentLimit(_config.peak_current);
+                talon->ConfigPeakCurrentDuration(200);
                 talon->EnableCurrentLimit(true);
-                talon->ConfigPeakCurrentLimit(_config.current_limit);
-                talon->ConfigContinuousCurrentLimit(100);
+
+                if(_config.limit_enable){
+                    talon->ConfigForwardLimitSwitchSource(LimitSwitchSource::LimitSwitchSource_FeedbackConnector, LimitSwitchNormal::LimitSwitchNormal_NormallyOpen);
+                    talon->ConfigReverseLimitSwitchSource(LimitSwitchSource::LimitSwitchSource_FeedbackConnector, LimitSwitchNormal::LimitSwitchNormal_NormallyOpen);
+                }else{
+                    talon->ConfigForwardLimitSwitchSource(LimitSwitchSource::LimitSwitchSource_Deactivated, LimitSwitchNormal::LimitSwitchNormal_Disabled);
+                    talon->ConfigReverseLimitSwitchSource(LimitSwitchSource::LimitSwitchSource_Deactivated, LimitSwitchNormal::LimitSwitchNormal_Disabled);
+                }
 
                 ROS_INFO("Reconfigured Talon: %s with %d %f %f %f", _name.c_str(), talon->GetDeviceID(),
                          _config.P, _config.I, _config.D);

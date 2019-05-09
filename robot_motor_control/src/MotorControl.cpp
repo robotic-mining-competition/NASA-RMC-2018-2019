@@ -39,8 +39,12 @@ int main(int argc, char **argv) {
                 config.F = (double)v["F"];
             if(v.hasMember("stall_k"))
                 config.stall_k = (double)v["stall_k"];
-            if(v.hasMember("current_limit"))
-                config.current_limit = (int)v["current_limit"];
+            if(v.hasMember("continuous_current"))
+                config.continuous_current = (int)v["continuous_current"];
+            if(v.hasMember("peak_current"))
+                config.peak_current = (int)v["peak_current"];
+            if(v.hasMember("limit_enable"))
+                config.limit_enable = (bool)v["limit_enable"];
 
             auto node = ros::NodeHandle(nh, name);
             talons.push_back(std::make_unique<TalonNode>(node, name, config));

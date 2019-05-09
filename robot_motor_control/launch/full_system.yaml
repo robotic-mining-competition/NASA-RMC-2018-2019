@@ -6,7 +6,7 @@ talons:
     D: 175.0
     inverted: False
   front_right:
-    id: 1
+    id: 4
     P: 3.0
     I: 0.015
     D: 175.0
@@ -37,7 +37,8 @@ talons:
     inverted: False
     invert_sensor: True
     stall_k: 10.0
-    current_limit: 50
+    continuous_current: 40
+    peak_current: 60
     P: 0.15
     I: 0.001
     D: 10.0
@@ -46,7 +47,8 @@ talons:
     inverted: False
     invert_sensor: True
     stall_k: 10.0
-    current_limit: 50
+    continuous_current: 40
+    peak_current: 60
     P: 8.0
     I: 0.025
     D: 550.0
