@@ -112,7 +112,7 @@ namespace robot_motor_control {
 
                 talon->ConfigContinuousCurrentLimit(_config.continuous_current);
                 talon->ConfigPeakCurrentLimit(_config.peak_current);
-                talon->ConfigPeakCurrentDuration(200);
+                talon->ConfigPeakCurrentDuration(250);
                 talon->EnableCurrentLimit(true);
 
                 if(_config.limit_enable){
@@ -149,18 +149,15 @@ namespace robot_motor_control {
                 talon->SetNeutralMode(NeutralMode::Brake);
             }
             if(!this->disabled){
-                talon->Set(this->_controlMode, this->_output);
-
                 //Check stalled
-                if(talon->GetOutputCurrent() !=0 && talon->GetMotorOutputVoltage() != 0 &&
-                talon->GetOutputCurrent() / talon->GetMotorOutputVoltage() > _config.stall_k){
+                if(talon->GetOutputCurrent() > 2.5 && std::abs(talon->GetSelectedSensorVelocity(0)) < 5){
                     // Stalling
                     if(stalled == nullptr){
                         stalled = std::make_shared<ros::Time>(ros::Time::now());
                         ROS_WARN("Motor is stalling! %s %d", _name.c_str(), _config.id);
                     }else{
                         stall_time = ros::Time::now() - *stalled;
-                        if(stall_time > ros::Duration(0.5)){
+                        if(stall_time > ros::Duration(0.2)){
                             talon->NeutralOutput();
                             ROS_WARN("Motor disabled for stalling! %s %d", _name.c_str(), _config.id);
                         }
@@ -168,15 +165,20 @@ namespace robot_motor_control {
                 }else{
                     // Not stalled
                     if(stalled  != nullptr){
-                        if(stall_time > ros::Duration(0.5) && ros::Time::now() - *stalled - stall_time < ros::Duration(1.0)){
+                        if(stall_time > ros::Duration(0.2) && ros::Time::now() - *stalled - stall_time < ros::Duration(2.5)){
                             // Let cool down
                             talon->SetNeutralMode(NeutralMode::Coast);
                             talon->NeutralOutput();
                         }else{
                             stalled.reset();
                             talon->SetNeutralMode(NeutralMode::Brake);
+
                         }
                     }
+                }
+
+                if(stalled == nullptr || stall_time <= ros::Duration(0.25)){
+                    talon->Set(this->_controlMode, this->_output);
                 }
             }
 
